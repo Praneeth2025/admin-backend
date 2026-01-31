@@ -1,128 +1,116 @@
+require('dotenv').config(); // MUST BE AT THE VERY TOP
 const express = require("express");
 const { MongoClient, ObjectId } = require("mongodb");
 const cors = require("cors");
 const { google } = require("googleapis");
+
 const app = express();
 const port = 5003;
-require('dotenv').config();
+
 app.use(cors());
 app.use(express.json());
-const CLIENT_ID = process.env.CLIENT_ID;
-const CLIENT_SECRET =process.env.CLIENT_SECRET;
-const REDIRECT_URI =process.env.REDIRECT_URI;
-const REFRESH_TOKEN =process.env.REFRESH_TOKEN;
 
-const mongoURI =process.env.MONGO_URI;
-
+// Verify MongoDB URI exists
+const mongoURI = process.env.MONGO_URI;
+if (!mongoURI) {
+  console.error("ERROR: MONGO_URI is missing from .env file");
+  process.exit(1);
+}
 
 const dbName = "synergic";
-const collectionName = "request_details";
 const paperCollection = "paper_details";
-
 let db;
 
-MongoClient.connect(mongoURI, { useNewUrlParser: true, useUnifiedTopology: true })
+// MongoDB Connection
+MongoClient.connect(mongoURI)
   .then(client => {
     db = client.db(dbName);
-    console.log("Connected to MongoDB");
+    console.log("✅ Connected to MongoDB: synergic");
   })
-  .catch(err => console.error("MongoDB connection error:", err));
+  .catch(err => console.error("❌ MongoDB connection error:", err));
 
-app.get("/files", async (req, res) => {
-  try {
-    const collection = db.collection(collectionName);
-    const files = await collection.find({}).toArray();
-    res.json(files);
-  } catch (error) {
-    res.status(500).json({ message: "Error fetching data", error });
-  }
-});
-
-app.post("/add", async (req, res) => {
-  try {
-    const collection = db.collection(paperCollection);
-    const oldCollection = db.collection(collectionName);
-
-    const fileId = req.body._id ? new ObjectId(req.body._id) : new ObjectId();
-    const fileData = {
-      _id: fileId,
-      filename: req.body.filename,
-      subject: req.body.subject,
-      yearOfStudy: req.body.yearOfStudy,
-      driveLink: req.body.driveLink,
-      branch: req.body.branch,
-      semester: req.body.semester,
-      uploadedAt: req.body.uploadedAt,
-    };
-
-    const result = await collection.insertOne(fileData);
-    const results = await oldCollection.deleteOne({ _id: fileId });
-
-    res.json({
-      message: "File added and removed successfully",
-      addResult: result,
-      removeResult: results,
-    });
-  } catch (error) {
-    console.error("Error processing request:", error);
-    res.status(500).json({ message: "Error processing data", error });
-  }
-});
-
-const oauth2Client = new google.auth.OAuth2(CLIENT_ID, CLIENT_SECRET, REDIRECT_URI);
-oauth2Client.setCredentials({ refresh_token: REFRESH_TOKEN });
+// Google Drive Setup
+const oauth2Client = new google.auth.OAuth2(
+  process.env.CLIENT_ID,
+  process.env.CLIENT_SECRET,
+  process.env.REDIRECT_URI
+);
+oauth2Client.setCredentials({ refresh_token: process.env.REFRESH_TOKEN });
 const drive = google.drive({ version: "v3", auth: oauth2Client });
 
-const getFileIdFromDriveLink = (driveLink) => {
-  const match = driveLink.match(/\/d\/(.*?)(\/|$)/);
+// Helper: Extract File ID from Drive Link
+const getFileId = (link) => {
+  const match = link?.match(/\/d\/(.*?)(\/|$)/);
   return match ? match[1] : null;
 };
 
-const deleteDriveFile = async (driveLink) => {
-  const fileId = getFileIdFromDriveLink(driveLink);
-  if (!fileId) {
-    console.log("Invalid Drive Link, skipping deletion.");
-    return { success: false, message: "Invalid Drive Link" };
-  }
+// --- ENDPOINTS ---
+
+// GET: Fetch only duplicate pairs (Subject + Year + Type)
+app.get("/duplicates", async (req, res) => {
   try {
-    await drive.files.delete({ fileId });
-    console.log(`Deleted Google Drive file: ${fileId}`);
-    return { success: true, message: "Google Drive file deleted successfully" };
+    const collection = db.collection(paperCollection);
+
+    const duplicates = await collection.aggregate([
+      {
+        // 1. Filter out ClassTests
+        $match: { Type: { $ne: "ClassTest" } }
+      },
+      {
+        // 2. Group by duplicate criteria
+        $group: {
+          _id: {
+            subject: "$subject",
+            yearOfStudy: "$yearOfStudy",
+            Type: "$Type"
+          },
+          files: { $push: "$$ROOT" },
+          count: { $sum: 1 }
+        }
+      },
+      {
+        // 3. Only keep groups with duplicates
+        $match: { count: { $gt: 1 } }
+      }
+    ]).toArray();
+
+    // Flattening for the frontend
+    const result = duplicates.flatMap(group => group.files);
+    res.json(result);
   } catch (error) {
-    console.error("Error deleting Google Drive file:", error);
-    return { success: false, message: "Failed to delete Google Drive file", error };
-  }
-};
-
-app.delete("/remove/:_id", async (req, res) => {
-  try {
-    const collection = db.collection(collectionName);
-    const fileId = req.params._id;
-
-    if (!ObjectId.isValid(fileId)) {
-      return res.status(400).json({ message: "Invalid file ID" });
-    }
-
-    const fileToDelete = await collection.findOne({ _id: new ObjectId(fileId) });
-    if (!fileToDelete) {
-      return res.status(404).json({ message: "File not found" });
-    }
-
-    const result = await collection.deleteOne({ _id: new ObjectId(fileId) });
-    const driveDeleteResponse = await deleteDriveFile(fileToDelete.driveLink);
-
-    res.json({
-      message: "File removed from MongoDB and Google Drive",
-      deletedFile: fileToDelete,
-      result,
-      driveDeleteResponse,
-    });
-  } catch (error) {
-    console.error("Error removing file:", error);
-    res.status(500).json({ message: "Error removing data", error });
+    console.error("Fetch Error:", error);
+    res.status(500).json({ message: "Error fetching duplicates" });
   }
 });
 
-app.listen(port, () => {
-  console.log(`Server is running on port ${port}`);
+// DELETE: Remove file from DB and Google Drive
+app.delete("/remove-duplicate/:id", async (req, res) => {
+  try {
+    const collection = db.collection(paperCollection);
+    const id = req.params.id;
+
+    const file = await collection.findOne({ _id: new ObjectId(id) });
+    if (!file) return res.status(404).json({ message: "File not found" });
+
+    // 1. Delete from MongoDB
+    await collection.deleteOne({ _id: new ObjectId(id) });
+
+    // 2. Delete from Google Drive
+    const driveId = getFileId(file.driveLink);
+    if (driveId) {
+      try {
+        await drive.files.delete({ fileId: driveId });
+        console.log(`Deleted Drive File: ${driveId}`);
+      } catch (driveErr) {
+        console.warn("Drive deletion failed or file already gone:", driveErr.message);
+      }
+    }
+
+    res.json({ message: "Deleted successfully from DB and Drive" });
+  } catch (error) {
+    console.error("Delete Error:", error);
+    res.status(500).json({ message: "Error deleting file" });
+  }
 });
+
+app.listen(port, () => console.log(`🚀 Server running on http://localhost:${port}`));
