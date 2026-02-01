@@ -114,8 +114,6 @@ app.delete("/remove-duplicate/:id", async (req, res) => {
 
 const subjectCollection = "subject_details"; // New collection for curriculum structure
 
-// --- NEW ENDPOINT: Fetch Subject Structure ---
-
 app.get("/subject-structure", async (req, res) => {
   try {
     const collection = db.collection(subjectCollection);
@@ -132,6 +130,20 @@ app.get("/subject-structure", async (req, res) => {
   } catch (error) {
     console.error("Fetch Structure Error:", error);
     res.status(500).json({ message: "Error fetching subject structure" });
+  }
+});
+
+app.get("/allpapers", async (req, res) => {
+  try {
+    const collection = db.collection(paperCollection);
+    
+    // Fetch all papers, sorted by most recently uploaded
+    const papers = await collection.find({}).sort({ uploadedAt: -1 }).toArray();
+    
+    res.json(papers);
+  } catch (error) {
+    console.error("Fetch All Papers Error:", error);
+    res.status(500).json({ message: "Error fetching paper records" });
   }
 });
 
