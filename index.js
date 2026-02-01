@@ -83,7 +83,6 @@ app.get("/duplicates", async (req, res) => {
   }
 });
 
-// DELETE: Remove file from DB and Google Drive
 app.delete("/remove-duplicate/:id", async (req, res) => {
   try {
     const collection = db.collection(paperCollection);
@@ -110,6 +109,29 @@ app.delete("/remove-duplicate/:id", async (req, res) => {
   } catch (error) {
     console.error("Delete Error:", error);
     res.status(500).json({ message: "Error deleting file" });
+  }
+});
+
+const subjectCollection = "subject_details"; // New collection for curriculum structure
+
+// --- NEW ENDPOINT: Fetch Subject Structure ---
+
+app.get("/subject-structure", async (req, res) => {
+  try {
+    const collection = db.collection(subjectCollection);
+
+    // Since the entire data is in one ID/document, we find the first one
+    const structure = await collection.findOne({});
+
+    if (!structure) {
+      return res.status(404).json({ message: "No subject data found" });
+    }
+
+    // Return the document (which contains BTech, MTech, etc.)
+    res.json(structure);
+  } catch (error) {
+    console.error("Fetch Structure Error:", error);
+    res.status(500).json({ message: "Error fetching subject structure" });
   }
 });
 
