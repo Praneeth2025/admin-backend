@@ -147,4 +147,53 @@ app.get("/allpapers", async (req, res) => {
   }
 });
 
+
+
+
+app.get("/unverified-papers", async (req, res) => {
+  try {
+    const collection = db.collection(paperCollection);
+    
+    // Fetch papers where isVerified is specifically false
+    const unverified = await collection
+      .find({ isVerified: false })
+      .sort({ uploadedAt: -1 })
+      .toArray();
+    
+    res.json(unverified);
+  } catch (error) {
+    console.error("Fetch Unverified Papers Error:", error);
+    res.status(500).json({ message: "Error fetching unverified paper records" });
+  }
+});
+
+
+
+app.patch("/verify-paper/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const synergicDb = mongoose.connection.useDb("synergic");
+    const FileModel = synergicDb.models.paper_details || synergicDb.model("paper_details", fileSchema);
+
+    const updatedPaper = await FileModel.findByIdAndUpdate(
+      id,
+      { isVerified: true },
+      { new: true } // Returns the updated document
+    );
+
+    if (!updatedPaper) {
+      return res.status(404).json({ error: "Paper not found" });
+    }
+
+    res.json({ 
+      success: true, 
+      message: "Paper verified successfully", 
+      data: updatedPaper 
+    });
+  } catch (error) {
+    console.error("❌ Verification error:", error.message);
+    res.status(500).json({ error: "Failed to verify paper" });
+  }
+});
+
 app.listen(port, () => console.log(`🚀 Server running on http://localhost:${port}`));
