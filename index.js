@@ -167,33 +167,46 @@ app.get("/unverified-papers", async (req, res) => {
   }
 });
 
-
-
 app.patch("/verify-paper/:id", async (req, res) => {
   try {
     const { id } = req.params;
-    const synergicDb = mongoose.connection.useDb("synergic");
-    const FileModel = synergicDb.models.paper_details || synergicDb.model("paper_details", fileSchema);
+    const collection = db.collection(paperCollection);
 
-    const updatedPaper = await FileModel.findByIdAndUpdate(
-      id,
-      { isVerified: true },
-      { new: true } // Returns the updated document
+    const result = await collection.updateOne(
+      { _id: new mongoose.Types.ObjectId(id) }, // Fixed here
+      { $set: { isVerified: true } }
     );
 
-    if (!updatedPaper) {
-      return res.status(404).json({ error: "Paper not found" });
+    if (result.matchedCount === 0) {
+      return res.status(404).json({ message: "Paper record not found" });
     }
 
-    res.json({ 
-      success: true, 
-      message: "Paper verified successfully", 
-      data: updatedPaper 
-    });
+    res.json({ success: true, message: "Paper verified successfully" });
   } catch (error) {
-    console.error("❌ Verification error:", error.message);
-    res.status(500).json({ error: "Failed to verify paper" });
+    console.error("Verify Paper Error:", error);
+    res.status(500).json({ message: "Error updating verification status" });
   }
 });
+app.delete("/deny-paper/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const collection = db.collection(paperCollection);
+
+    const result = await collection.deleteOne({ 
+      _id: new mongoose.Types.ObjectId(id) // Fixed here
+    });
+
+    if (result.deletedCount === 0) {
+      return res.status(404).json({ message: "Paper record not found" });
+    }
+
+    res.json({ success: true, message: "Paper denied and removed from system" });
+  } catch (error) {
+    console.error("Deny Paper Error:", error);
+    res.status(500).json({ message: "Error removing paper record" });
+  }
+});
+
+
 
 app.listen(port, () => console.log(`🚀 Server running on http://localhost:${port}`));
