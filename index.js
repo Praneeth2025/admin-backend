@@ -209,5 +209,109 @@ app.delete("/deny-paper/:id", async (req, res) => {
 });
 
 
+// GET: Fetch subjects based on degree, branch, and semester
+// Example: /subjects/BTech/CSE/Semester_3
+app.get("/subjects/:degree/:branch/:semester", async (req, res) => {
+  try {
+    const { degree, branch, semester } = req.params;
+    const collection = db.collection(subjectCollection);
+
+    // 1. Fetch the curriculum document
+    const structure = await collection.findOne({});
+
+    if (!structure) {
+      return res.status(404).json({ message: "Curriculum data not found" });
+    }
+
+    // 2. Navigate the nested structure using bracket notation
+    // structure -> BTech -> CSE -> Semester_3
+    try {
+      const subjects = structure[degree][branch][semester];
+
+      if (!subjects) {
+        return res.status(404).json({ 
+          message: `No subjects found for ${degree} > ${branch} > ${semester}` 
+        });
+      }
+
+      res.json(subjects);
+    } catch (err) {
+      // This catches cases where degree or branch keys don't exist
+      res.status(404).json({ message: "Invalid Degree or Branch path" });
+    }
+
+  } catch (error) {
+    console.error("Fetch Subjects Error:", error);
+    res.status(500).json({ message: "Internal Server Error" });
+  }
+});
+
+
+// PUT: Replace the entire subjects array for a specific semester
+// URL Example: /update-subjects/BTech/CSE/chemistry-Semester
+app.put("/update-subjects/:degree/:branch/:semester", async (req, res) => {
+  try {
+    const { degree, branch, semester } = req.params;
+    const newSubjects = req.body;
+
+    if (!Array.isArray(newSubjects)) {
+      return res.status(400).json({ message: "Invalid data format." });
+    }
+
+    const collection = db.collection(subjectCollection);
+    const allSubjectsCollection = db.collection("all_subjects");
+
+    // 1. Gather subjects that have a NAME and a NON-EMPTY CODE
+    let subjectsToSync = [];
+
+    newSubjects.forEach(sub => {
+      // Check top-level subjects
+      if (sub.name && sub.code && sub.code.trim() !== "") {
+        subjectsToSync.push({ name: sub.name, code: sub.code });
+      }
+      
+      // Check nested options (Elective choices)
+      if (sub.isNested && Array.isArray(sub.options)) {
+        sub.options.forEach(opt => {
+          if (opt.name && opt.code && opt.code.trim() !== "") {
+            subjectsToSync.push({ name: opt.name, code: opt.code });
+          }
+        });
+      }
+    });
+
+    // 2. Sync with all_subjects based on the "name"
+    if (subjectsToSync.length > 0) {
+      const bulkOps = subjectsToSync.map(s => ({
+        updateOne: {
+          filter: { name: s.name }, // Check if the name exists
+          update: { $setOnInsert: s }, // If missing, insert both name and code
+          upsert: true
+        }
+      }));
+      await allSubjectsCollection.bulkWrite(bulkOps);
+    }
+
+    // 3. Update the main curriculum document
+    const updatePath = `${degree}.${branch}.${semester}`;
+    const result = await collection.updateOne(
+      {}, 
+      { $set: { [updatePath]: newSubjects } }
+    );
+
+    res.json({ 
+      success: true, 
+      message: `Updated ${semester} and synced valid subjects to master list.`,
+      syncedCount: subjectsToSync.length
+    });
+
+  } catch (error) {
+    console.error("Update/Sync Error:", error);
+    res.status(500).json({ message: "Error updating subjects" });
+  }
+});
+
+
+
 
 app.listen(port, () => console.log(`🚀 Server running on http://localhost:${port}`));
