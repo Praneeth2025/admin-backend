@@ -261,17 +261,17 @@ app.put("/update-subjects/:degree/:branch/:semester", async (req, res) => {
     const collection = db.collection(subjectCollection);
     const allSubjectsCollection = db.collection("all_subjects");
 
-    // 1. Gather subjects that have a NAME and a NON-EMPTY CODE
+    // 1. Gather subjects to sync
     let subjectsToSync = [];
 
     newSubjects.forEach(sub => {
-      // Check top-level subjects
+      // A. Handle Standard Subjects (Must have name AND code)
       if (sub.name && sub.code && sub.code.trim() !== "") {
         subjectsToSync.push({ name: sub.name, code: sub.code });
       }
       
-      // Check nested options (Elective choices)
-      if (sub.isNested && Array.isArray(sub.options)) {
+      // B. Handle Elective Groups (Look for the options array regardless of isNested flag)
+      if (sub.options && Array.isArray(sub.options) && sub.options.length > 0) {
         sub.options.forEach(opt => {
           if (opt.name && opt.code && opt.code.trim() !== "") {
             subjectsToSync.push({ name: opt.name, code: opt.code });
@@ -280,12 +280,14 @@ app.put("/update-subjects/:degree/:branch/:semester", async (req, res) => {
       }
     });
 
-    // 2. Sync with all_subjects based on the "name"
+
+    // 2. Perform Bulk Write with $set instead of $setOnInsert
     if (subjectsToSync.length > 0) {
       const bulkOps = subjectsToSync.map(s => ({
         updateOne: {
-          filter: { name: s.name }, // Check if the name exists
-          update: { $setOnInsert: s }, // If missing, insert both name and code
+          filter: { name: s.name }, 
+          // Use $set to ensure the code is updated if it already exists
+          update: { $set: { name: s.name, code: s.code } }, 
           upsert: true
         }
       }));
@@ -301,8 +303,7 @@ app.put("/update-subjects/:degree/:branch/:semester", async (req, res) => {
 
     res.json({ 
       success: true, 
-      message: `Updated ${semester} and synced valid subjects to master list.`,
-      syncedCount: subjectsToSync.length
+      message: `Updated ${semester} and synced ${subjectsToSync.length} subjects.`,
     });
 
   } catch (error) {
